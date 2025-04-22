@@ -541,6 +541,15 @@ def cli_api_server(
     default="WARNING",
     help="Optional. Override the default verbosity level.",
 )
+@click.option(
+    "--agent_engine_id",
+    type=str,
+    default="",
+    help=(
+        "Optional. If you are using a managed session service via Vertex AI Agent Engine, "
+        "provide its resource ID here."
+    ),
+)
 @click.argument(
     "agent",
     type=click.Path(
@@ -558,6 +567,7 @@ def cli_deploy_cloud_run(
     trace_to_cloud: bool,
     with_ui: bool,
     verbosity: str,
+    agent_engine_id: str,
 ):
   """Deploys an agent to Cloud Run.
 
@@ -579,6 +589,7 @@ def cli_deploy_cloud_run(
         trace_to_cloud=trace_to_cloud,
         with_ui=with_ui,
         verbosity=verbosity,
+        agent_engine_id=agent_engine_id,
     )
   except Exception as e:
     click.secho(f"Deploy failed: {e}", fg="red", err=True)

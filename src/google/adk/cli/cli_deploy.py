@@ -38,6 +38,7 @@ ENV PATH="/home/myuser/.local/bin:$PATH"
 ENV GOOGLE_GENAI_USE_VERTEXAI=1
 ENV GOOGLE_CLOUD_PROJECT={gcp_project_id}
 ENV GOOGLE_CLOUD_LOCATION={gcp_region}
+{session_db_url}
 
 # Set up environment variables - End
 
@@ -85,99 +86,107 @@ def to_cloud_run(
     trace_to_cloud: bool,
     with_ui: bool,
     verbosity: str,
+    agent_engine_id: str = "",
 ):
-  """Deploys an agent to Google Cloud Run.
+    """Deploys an agent to Google Cloud Run.
 
-  `agent_folder` should contain the following files:
+    `agent_folder` should contain the following files:
 
-  - __init__.py
-  - agent.py
-  - requirements.txt (optional, for additional dependencies)
-  - ... (other required source files)
+    - __init__.py
+    - agent.py
+    - requirements.txt (optional, for additional dependencies)
+    - ... (other required source files)
 
-  The folder structure of temp_folder will be
+    The folder structure of temp_folder will be
 
-  * dist/[google_adk wheel file]
-  * agents/[app_name]/
-    * agent source code from `agent_folder`
+    * dist/[google_adk wheel file]
+    * agents/[app_name]/
+      * agent source code from `agent_folder`
 
-  Args:
-    agent_folder: The folder (absolute path) containing the agent source code.
-    project: Google Cloud project id.
-    region: Google Cloud region.
-    service_name: The service name in Cloud Run.
-    app_name: The name of the app, by default, it's basename of `agent_folder`.
-    temp_folder: The temp folder for the generated Cloud Run source files.
-    port: The port of the ADK api server.
-    trace_to_cloud: Whether to enable Cloud Trace.
-    with_ui: Whether to deploy with UI.
-    verbosity: The verbosity level of the CLI.
-  """
-  app_name = app_name or os.path.basename(agent_folder)
+    Args:
+        agent_folder: The folder (absolute path) containing the agent source code.
+        project: Google Cloud project id.
+        region: Google Cloud region.
+        service_name: The service name in Cloud Run.
+        app_name: The name of the app, by default, it's basename of `agent_folder`.
+        temp_folder: The temp folder for the generated Cloud Run source files.
+        port: The port of the ADK api server.
+        trace_to_cloud: Whether to enable Cloud Trace.
+        with_ui: Whether to deploy with UI.
+        verbosity: The verbosity level of the CLI.
+        agent_engine_id: The Vertex AI Agent Engine resource ID for session persistence.
+    """
+    app_name = app_name or os.path.basename(agent_folder)
 
-  click.echo(f'Start generating Cloud Run source files in {temp_folder}')
+    click.echo(f'Start generating Cloud Run source files in {temp_folder}')
 
-  # remove temp_folder if exists
-  if os.path.exists(temp_folder):
-    click.echo('Removing existing files')
-    shutil.rmtree(temp_folder)
+    # remove temp_folder if exists
+    if os.path.exists(temp_folder):
+      click.echo('Removing existing files')
+      shutil.rmtree(temp_folder)
 
-  try:
-    # copy agent source code
-    click.echo('Copying agent source code...')
-    agent_src_path = os.path.join(temp_folder, 'agents', app_name)
-    shutil.copytree(agent_folder, agent_src_path)
-    requirements_txt_path = os.path.join(agent_src_path, 'requirements.txt')
-    install_agent_deps = (
-        f'RUN pip install -r "/app/agents/{app_name}/requirements.txt"'
-        if os.path.exists(requirements_txt_path)
-        else ''
-    )
-    click.echo('Copying agent source code complete.')
-
-    # create Dockerfile
-    click.echo('Creating Dockerfile...')
-    dockerfile_content = _DOCKERFILE_TEMPLATE.format(
-        gcp_project_id=project,
-        gcp_region=region,
-        app_name=app_name,
-        port=port,
-        command='web' if with_ui else 'api_server',
-        install_agent_deps=install_agent_deps,
-        trace_to_cloud_option='--trace_to_cloud' if trace_to_cloud else '',
-    )
-    dockerfile_path = os.path.join(temp_folder, 'Dockerfile')
-    os.makedirs(temp_folder, exist_ok=True)
-    with open(dockerfile_path, 'w', encoding='utf-8') as f:
-      f.write(
-          dockerfile_content,
+    try:
+      # copy agent source code
+      click.echo('Copying agent source code...')
+      agent_src_path = os.path.join(temp_folder, 'agents', app_name)
+      shutil.copytree(agent_folder, agent_src_path)
+      requirements_txt_path = os.path.join(agent_src_path, 'requirements.txt')
+      install_agent_deps = (
+          f'RUN pip install -r "/app/agents/{app_name}/requirements.txt"'
+          if os.path.exists(requirements_txt_path)
+          else ''
       )
-    click.echo(f'Creating Dockerfile complete: {dockerfile_path}')
+      click.echo('Copying agent source code complete.')
 
-    # Deploy to Cloud Run
-    click.echo('Deploying to Cloud Run...')
-    region_options = ['--region', region] if region else []
-    project = _resolve_project(project)
-    subprocess.run(
-        [
-            'gcloud',
-            'run',
-            'deploy',
-            service_name,
-            '--source',
-            temp_folder,
-            '--project',
-            project,
-            *region_options,
-            '--port',
-            str(port),
-            '--verbosity',
-            verbosity,
-            '--labels',
-            'created-by=adk',
-        ],
-        check=True,
-    )
-  finally:
-    click.echo(f'Cleaning up the temp folder: {temp_folder}')
-    shutil.rmtree(temp_folder)
+      # create Dockerfile
+      click.echo('Creating Dockerfile...')
+      session_db_url = (
+          f'ENV SESSION_DB_URL="agentengine://{agent_engine_id}"'
+          if agent_engine_id
+          else ''
+      )
+      dockerfile_content = _DOCKERFILE_TEMPLATE.format(
+          gcp_project_id=project,
+          gcp_region=region,
+          app_name=app_name,
+          port=port,
+          command='web' if with_ui else 'api_server',
+          install_agent_deps=install_agent_deps,
+          trace_to_cloud_option='--trace_to_cloud' if trace_to_cloud else '',
+          session_db_url=session_db_url,
+      )
+      dockerfile_path = os.path.join(temp_folder, 'Dockerfile')
+      os.makedirs(temp_folder, exist_ok=True)
+      with open(dockerfile_path, 'w', encoding='utf-8') as f:
+        f.write(
+            dockerfile_content,
+        )
+      click.echo(f'Creating Dockerfile complete: {dockerfile_path}')
+
+      # Deploy to Cloud Run
+      click.echo('Deploying to Cloud Run...')
+      region_options = ['--region', region] if region else []
+      project = _resolve_project(project)
+      subprocess.run(
+          [
+              'gcloud',
+              'run',
+              'deploy',
+              service_name,
+              '--source',
+              temp_folder,
+              '--project',
+              project,
+              *region_options,
+              '--port',
+              str(port),
+              '--verbosity',
+              verbosity,
+              '--labels',
+              'created-by=adk',
+          ],
+          check=True,
+      )
+    finally:
+      click.echo(f'Cleaning up the temp folder: {temp_folder}')
+      shutil.rmtree(temp_folder)
